@@ -1,0 +1,56 @@
+---
+- name: Configure New Router
+  hosts: new_routers
+  gather_facts: no
+  vars_files:
+    - vars/router_config.yml
+
+  tasks:
+    - name: Reserve IP address in Infoblox
+      community.general.infoblox:
+        provider: "{{ infoblox_credentials }}"
+        state: present
+        name: "{{ inventory_hostname }}"
+        configure_for_dns: yes
+      register: reserved_ip
+
+    - name: Download router configuration from GitHub
+      ansible.builtin.get_url:
+        url: "https://github.com/yourRepo/router_configs/archive/main.zip"
+        dest: "/tmp/router_config.zip"
+        mode: '0755'
+
+    - name: Extract the configuration file
+      ansible.builtin.unarchive:
+        src: "/tmp/router_config.zip"
+        dest: "/tmp/"
+        remote_src: yes
+
+    - name: Read hostname from CSV file
+      ansible.builtin.read_csv:
+        path: "/path/to/hostname.csv"
+        key: inventory_hostname
+      register: csv_hostname
+
+    - name: Configure the router
+      ansible.network.cli_config:
+        config: "{{ lookup('file', '/tmp/router_configs/' + csv_hostname['hostname'] + '.conf') }}"
+        backup: yes
+
+    - name: Set IP, netmask, and gateway from Infoblox reservation
+      ansible.network.cli_config:
+        commands:
+          - "configure terminal"
+          - "interface GigabitEthernet0/0"
+          - "ip address {{ reserved_ip.ip }} {{ reserved_ip.netmask }}"
+          - "no shutdown"
+          - "ip route 0.0.0.0 0.0.0.0 {{ reserved_ip.gateway }}"
+
+  environment:
+    ANSIBLE_NET_USERNAME: "{{ ansible_user }}"
+    ANSIBLE_NET_PASSWORD: "{{ ansible_ssh_pass }}"
+    ANSIBLE_NET_AUTHORIZE: yes
+    ANSIBLE_NET_AUTH_PASS: "{{ ansible_become_pass }}"
+    
+    
+# ansible-galaxy collection install community.general ansible.netcommon
